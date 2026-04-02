@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Device Motion Tracker</title>
+<title>Turbulence Tracker</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -126,14 +126,14 @@
 <body>
 
 <div id="header">
-  <h1>Motion Tracker</h1>
+  <h1>Turbulence Tracker</h1>
   <span id="status">Waiting</span>
 </div>
 
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
   <button id="start-btn">Enable Motion</button>
-  <span id="version">v1.3</span>
+  <span id="version">v1.4</span>
   <div id="controls">
     <button class="ctrl-btn" id="btn-clear">Clear</button>
     <button class="ctrl-btn" id="btn-pause">Pause</button>
@@ -170,28 +170,39 @@
   const btnClear = document.getElementById('btn-clear');
   const btnPause = document.getElementById('btn-pause');
 
-  // History of {x, y} points (position in meters, phone flat on table)
-  const MAX_HISTORY = 600;
+  // Each point is the raw acceleration sample {x, y} in m/s²
+  // Center of canvas = (0,0) = calm. Distance from center = turbulence intensity.
+  const MAX_HISTORY = 900; // ~15 seconds at 60 Hz
   const history = [];
 
   let paused = false;
   let started = false;
-  let cx = 0, cy = 0; // canvas center
-  const SCALE = 180;  // pixels per meter
+  let cx = 0, cy = 0;
   let dpr = window.devicePixelRatio || 1;
 
-  // Physics state
-  let pos = { x: 0, y: 0 };
-  let vel = { x: 0, y: 0 };
-  let lastMotionTime = 0;
+  // Scale: px per m/s² — sized so ±MAX_G fills the canvas radius
+  const MAX_G = 4; // m/s² — severe turbulence threshold
+  let scale = 1; // recomputed in resizeCanvas
 
-  // Current smoothed display values
+  // Smoothed values for readout only
   let curX = 0, curY = 0, curZ = 0;
-  const SMOOTH = 0.3;
+  const SMOOTH = 0.25;
 
-  // Viewport: translates canvas so origin sits at canvas center
-  // (updated in resizeCanvas and when canvas is resized)
-  let viewX = 0, viewY = 0;
+  // Peak magnitude for the level badge (decays over time)
+  let peakMag = 0;
+  const PEAK_DECAY = 0.995; // per frame
+
+  // Turbulence level thresholds (m/s²)
+  const LEVELS = [
+    { label: 'Severe',   min: 3.0, color: '#ff4444' },
+    { label: 'Moderate', min: 1.2, color: '#fb923c' },
+    { label: 'Light',    min: 0.3, color: '#facc15' },
+    { label: 'Calm',     min: 0,   color: '#4ade80' },
+  ];
+
+  function getLevel(mag) {
+    return LEVELS.find(l => mag >= l.min) || LEVELS[LEVELS.length - 1];
+  }
 
   function resizeCanvas() {
     const wrap = canvas.parentElement;
@@ -202,8 +213,8 @@
     canvas.style.height = wrap.clientHeight + 'px';
     cx = canvas.width / 2;
     cy = canvas.height / 2;
-    // Keep origin at center when not yet tracking
-    if (!started) { viewX = cx; viewY = cy; }
+    // Fit MAX_G into 90% of the smaller half-dimension
+    scale = Math.min(cx, cy) * 0.9 / MAX_G;
     draw();
   }
 
@@ -215,113 +226,110 @@
     const w = canvas.width;
     const h = canvas.height;
 
-    // Background
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, w, h);
 
     if (!started) return;
 
-    // Grid lines
-    drawGrid(w, h);
+    drawRings();
 
     if (history.length < 2) return;
 
-    // Pan: smoothly keep the current head near canvas center
-    const last = history[history.length - 1];
-    const targetOX = cx - last.x * SCALE * dpr;
-    const targetOY = cy - last.y * SCALE * dpr;
-    viewX += (targetOX - viewX) * 0.06;
-    viewY += (targetOY - viewY) * 0.06;
+    // Decay peak
+    peakMag *= PEAK_DECAY;
 
-    ctx.save();
-    ctx.translate(viewX, viewY);
-
-    // Draw trail
+    // Draw trail — all points relative to canvas center
     const n = history.length;
     for (let i = 1; i < n; i++) {
-      const t = i / n; // 0..1, 1 = newest
+      const t = i / n; // 0=oldest, 1=newest
       const p = history[i - 1];
       const q = history[i];
-      const alpha = Math.pow(t, 1.2) * 0.9 + 0.05;
+      const alpha = Math.pow(t, 1.5) * 0.88 + 0.04;
 
       ctx.beginPath();
-      ctx.moveTo(p.x * SCALE * dpr, p.y * SCALE * dpr);
-      ctx.lineTo(q.x * SCALE * dpr, q.y * SCALE * dpr);
+      ctx.moveTo(cx + p.x * scale, cy - p.y * scale);
+      ctx.lineTo(cx + q.x * scale, cy - q.y * scale);
 
-      // Color shifts from cool blue (old) to hot red/orange (new)
       const r = Math.round(t * 248 + (1 - t) * 60);
-      const g = Math.round(t * 80 + (1 - t) * 130);
-      const b = Math.round(t * 72 + (1 - t) * 250);
+      const g = Math.round(t * 80  + (1 - t) * 130);
+      const b = Math.round(t * 72  + (1 - t) * 250);
       ctx.strokeStyle = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
-      ctx.lineWidth = (1 + t * 2.5) * dpr;
+      ctx.lineWidth = (0.8 + t * 2.2) * dpr;
       ctx.lineCap = 'round';
       ctx.stroke();
     }
 
-    // Current position dot
+    // Current dot
     const head = history[history.length - 1];
+    const hx = cx + head.x * scale;
+    const hy = cy - head.y * scale;
+
     ctx.beginPath();
-    ctx.arc(head.x * SCALE * dpr, head.y * SCALE * dpr, 5 * dpr, 0, Math.PI * 2);
+    ctx.arc(hx, hy, 4.5 * dpr, 0, Math.PI * 2);
     ctx.fillStyle = '#fff';
     ctx.fill();
 
-    // Pulse ring
-    const pulse = (Date.now() % 1200) / 1200;
+    const pulse = (Date.now() % 1000) / 1000;
     ctx.beginPath();
-    ctx.arc(head.x * SCALE * dpr, head.y * SCALE * dpr, (5 + pulse * 14) * dpr, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(255,255,255,${(1 - pulse) * 0.4})`;
+    ctx.arc(hx, hy, (4.5 + pulse * 12) * dpr, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,255,255,${(1 - pulse) * 0.35})`;
     ctx.lineWidth = 1.5 * dpr;
     ctx.stroke();
 
-    ctx.restore();
-  }
-
-  function drawGrid(w, h) {
-    const step = SCALE * dpr;
-    const ox = ((viewX % step) + step) % step;
-    const oy = ((viewY % step) + step) % step;
-
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.lineWidth = 1;
-
-    for (let x = ox; x < w; x += step) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-    }
-    for (let y = oy; y < h; y += step) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-    }
-
-    // Axis labels at center
-    const aox = ((viewX % w) + w) % w;
-    const aoy = ((viewY % h) + h) % h;
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(aox, 0); ctx.lineTo(aox, h); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, aoy); ctx.lineTo(w, aoy); ctx.stroke();
-
-    // Labels
-    ctx.fillStyle = 'rgba(255,255,255,0.2)';
-    ctx.font = `${10 * dpr}px -apple-system, sans-serif`;
+    // Turbulence level badge (top center)
+    const lvl = getLevel(peakMag);
+    ctx.font = `600 ${13 * dpr}px -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('+X →', aox + 4, aoy + 2);
-    ctx.textBaseline = 'bottom';
-    ctx.fillText('+Y ↓', aox + 4, aoy - 2);
-
-    ctx.restore();
+    ctx.fillStyle = lvl.color;
+    ctx.fillText(lvl.label.toUpperCase(), cx, 10 * dpr);
   }
 
-  let animId;
-  function loop() {
-    draw();
-    animId = requestAnimationFrame(loop);
+  function drawRings() {
+    // Rings at 1, 2, 4 m/s² with labels
+    const rings = [
+      { r: 1,   label: '1',  alpha: 0.15 },
+      { r: 2,   label: '2',  alpha: 0.12 },
+      { r: MAX_G, label: `${MAX_G}`, alpha: 0.09 },
+    ];
+
+    // Crosshair axes
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, canvas.height); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(canvas.width, cy); ctx.stroke();
+
+    ctx.font = `${9 * dpr}px -apple-system, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillText('+X', cx + 4, cy - 8 * dpr);
+    ctx.textAlign = 'center';
+    ctx.fillText('+Y', cx, 4 * dpr + 8 * dpr);
+
+    rings.forEach(({ r, label, alpha }) => {
+      const pr = r * scale;
+      ctx.beginPath();
+      ctx.arc(cx, cy, pr, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Label at the right edge of each ring
+      ctx.fillStyle = `rgba(255,255,255,${alpha * 1.8})`;
+      ctx.font = `${9 * dpr}px -apple-system, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, cx + pr + 3 * dpr, cy);
+    });
+
+    ctx.restore();
   }
 
   function onMotion(e) {
     if (paused) return;
 
-    // acceleration excludes gravity — pure device motion
     const acc = e.acceleration;
     if (!acc) return;
 
@@ -329,36 +337,25 @@
     const ay = acc.y || 0;
     const az = acc.z || 0;
 
-    // dt in seconds, clamped so big gaps don't cause jumps
-    const now = Date.now();
-    const dt = lastMotionTime ? Math.min((now - lastMotionTime) / 1000, 0.05) : 0.016;
-    lastMotionTime = now;
-
-    // Smooth for readout display
+    // Smooth for readout
     curX += (ax - curX) * SMOOTH;
     curY += (ay - curY) * SMOOTH;
     curZ += (az - curZ) * SMOOTH;
 
-    // Integrate: acceleration → velocity → position
-    // Friction on velocity simulates the sensor noise settling back to rest
-    const FRICTION = 0.88;
-    vel.x = (vel.x + ax * dt) * FRICTION;
-    vel.y = (vel.y + ay * dt) * FRICTION;
-    pos.x += vel.x * dt;
-    pos.y += vel.y * dt;
+    // Track peak magnitude for level badge
+    const mag = Math.sqrt(ax * ax + ay * ay);
+    if (mag > peakMag) peakMag = mag;
 
-    history.push({ x: pos.x, y: pos.y });
+    // Raw acceleration directly as position — no integration
+    history.push({ x: ax, y: ay });
     if (history.length > MAX_HISTORY) history.shift();
 
-    // Readout
     numX.textContent = fmt(curX);
     numY.textContent = fmt(curY);
     numZ.textContent = fmt(curZ);
   }
 
   function startTracking() {
-    viewX = cx;
-    viewY = cy;
     window.addEventListener('devicemotion', onMotion);
     statusEl.textContent = 'Live';
     statusEl.classList.add('active');
@@ -368,7 +365,6 @@
   }
 
   function requestPermission() {
-    // iOS 13+ requires explicit permission
     if (typeof DeviceMotionEvent !== 'undefined' &&
         typeof DeviceMotionEvent.requestPermission === 'function') {
       DeviceMotionEvent.requestPermission()
@@ -384,17 +380,20 @@
           statusEl.textContent = 'Error: ' + err.message;
         });
     } else {
-      // Android / older iOS — no permission needed
       startBtn.style.display = 'none';
       startTracking();
     }
   }
 
+  let animId;
+  function loop() {
+    draw();
+    animId = requestAnimationFrame(loop);
+  }
+
   btnClear.addEventListener('click', () => {
     history.length = 0;
-    pos.x = 0; pos.y = 0;
-    vel.x = 0; vel.y = 0;
-    viewX = cx; viewY = cy;
+    peakMag = 0;
   });
 
   btnPause.addEventListener('click', () => {
@@ -406,7 +405,6 @@
   });
 
   startBtn.addEventListener('click', requestPermission);
-
   window.addEventListener('resize', resizeCanvas);
   resizeCanvas();
 })();
