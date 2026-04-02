@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Device Motion Tracker</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+  }
+  #header {
+    padding: 12px 16px 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #1e1e2e;
+  }
+  #header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: #c0c8ff;
+  }
+  #status {
+    font-size: 11px;
+    color: #666;
+  }
+  #status.active { color: #4ade80; }
+  #canvas-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  #readout {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1px;
+    background: #1a1a2a;
+    border-top: 1px solid #1e1e2e;
+  }
+  .val-box {
+    background: #0d0d1a;
+    padding: 10px 12px;
+    text-align: center;
+  }
+  .val-label {
+    font-size: 10px;
+    color: #556;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 2px;
+  }
+  .val-num {
+    font-size: 18px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.5px;
+  }
+  #val-x .val-num { color: #f87171; }
+  #val-y .val-num { color: #60a5fa; }
+  #val-z .val-num { color: #a78bfa; }
+  #start-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: #4f46e5;
+    color: white;
+    border: none;
+    border-radius: 14px;
+    padding: 16px 32px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.3px;
+    box-shadow: 0 4px 24px rgba(79,70,229,0.4);
+    -webkit-tap-highlight-color: transparent;
+  }
+  #start-btn:active { background: #4338ca; }
+  #controls {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    display: flex;
+    gap: 6px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  #controls.visible { opacity: 1; }
+  .ctrl-btn {
+    background: rgba(255,255,255,0.07);
+    color: #aaa;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ctrl-btn:active { background: rgba(255,255,255,0.14); }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>Motion Tracker</h1>
+  <span id="status">Waiting</span>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="canvas"></canvas>
+  <button id="start-btn">Enable Motion</button>
+  <div id="controls">
+    <button class="ctrl-btn" id="btn-clear">Clear</button>
+    <button class="ctrl-btn" id="btn-pause">Pause</button>
+  </div>
+</div>
+
+<div id="readout">
+  <div class="val-box" id="val-x">
+    <div class="val-label">X &mdash; Left/Right</div>
+    <div class="val-num" id="num-x">0.00</div>
+  </div>
+  <div class="val-box" id="val-y">
+    <div class="val-label">Y &mdash; Fwd/Back</div>
+    <div class="val-num" id="num-y">0.00</div>
+  </div>
+  <div class="val-box" id="val-z">
+    <div class="val-label">Z &mdash; Vertical</div>
+    <div class="val-num" id="num-z">0.00</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+  const startBtn = document.getElementById('start-btn');
+  const controls = document.getElementById('controls');
+  const numX = document.getElementById('num-x');
+  const numY = document.getElementById('num-y');
+  const numZ = document.getElementById('num-z');
+  const btnClear = document.getElementById('btn-clear');
+  const btnPause = document.getElementById('btn-pause');
+
+  // History of {x, y} points (acceleration values, phone flat)
+  const MAX_HISTORY = 600;
+  const history = [];
+
+  let paused = false;
+  let started = false;
+  let cx = 0, cy = 0; // canvas center
+  let scale = 40; // pixels per m/s²
+  let dpr = window.devicePixelRatio || 1;
+
+  // Current smoothed values
+  let curX = 0, curY = 0, curZ = 0;
+  const SMOOTH = 0.2;
+
+  // Viewport offset for panning the trail
+  let viewX = 0, viewY = 0;
+
+  function resizeCanvas() {
+    const wrap = canvas.parentElement;
+    dpr = window.devicePixelRatio || 1;
+    canvas.width = wrap.clientWidth * dpr;
+    canvas.height = wrap.clientHeight * dpr;
+    canvas.style.width = wrap.clientWidth + 'px';
+    canvas.style.height = wrap.clientHeight + 'px';
+    cx = canvas.width / 2;
+    cy = canvas.height / 2;
+    draw();
+  }
+
+  function fmt(v) {
+    return (v >= 0 ? '+' : '') + v.toFixed(2);
+  }
+
+  function draw() {
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Background
+    ctx.fillStyle = '#0a0a0f';
+    ctx.fillRect(0, 0, w, h);
+
+    if (!started) return;
+
+    // Grid lines
+    drawGrid(w, h);
+
+    if (history.length < 2) return;
+
+    // Translate so "origin" drifts to keep current position visible
+    const last = history[history.length - 1];
+    // Target: current position at center with slight lag
+    const targetOX = cx - last.x * scale * dpr;
+    const targetOY = cy - last.y * scale * dpr;
+    viewX += (targetOX - viewX) * 0.06;
+    viewY += (targetOY - viewY) * 0.06;
+
+    ctx.save();
+    ctx.translate(viewX, viewY);
+
+    // Draw trail
+    const n = history.length;
+    for (let i = 1; i < n; i++) {
+      const t = i / n; // 0..1
+      const p = history[i - 1];
+      const q = history[i];
+      const alpha = Math.pow(t, 1.5) * 0.85 + 0.05;
+
+      ctx.beginPath();
+      ctx.moveTo(p.x * scale * dpr, p.y * scale * dpr);
+      ctx.lineTo(q.x * scale * dpr, q.y * scale * dpr);
+
+      // Color shifts from cool blue (old) to hot red (new)
+      const r = Math.round(t * 248 + (1 - t) * 60);
+      const g = Math.round(t * 80 + (1 - t) * 130);
+      const b = Math.round(t * 72 + (1 - t) * 250);
+      ctx.strokeStyle = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
+      ctx.lineWidth = (1 + t * 2) * dpr;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+
+    // Current position dot
+    const head = history[history.length - 1];
+    ctx.beginPath();
+    ctx.arc(head.x * scale * dpr, head.y * scale * dpr, 5 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+
+    // Pulse ring
+    const pulse = (Date.now() % 1200) / 1200;
+    ctx.beginPath();
+    ctx.arc(head.x * scale * dpr, head.y * scale * dpr, (5 + pulse * 14) * dpr, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255,255,255,${(1 - pulse) * 0.4})`;
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawGrid(w, h) {
+    const step = scale * dpr;
+    const ox = ((viewX % step) + step) % step;
+    const oy = ((viewY % step) + step) % step;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+
+    for (let x = ox; x < w; x += step) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    }
+    for (let y = oy; y < h; y += step) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+
+    // Axis labels at center
+    const aox = ((viewX % w) + w) % w;
+    const aoy = ((viewY % h) + h) % h;
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(aox, 0); ctx.lineTo(aox, h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, aoy); ctx.lineTo(w, aoy); ctx.stroke();
+
+    // Labels
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.font = `${10 * dpr}px -apple-system, sans-serif`;
+    ctx.textBaseline = 'top';
+    ctx.fillText('+X →', aox + 4, aoy + 2);
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('+Y ↓', aox + 4, aoy - 2);
+
+    ctx.restore();
+  }
+
+  let animId;
+  function loop() {
+    draw();
+    animId = requestAnimationFrame(loop);
+  }
+
+  function onMotion(e) {
+    if (paused) return;
+
+    // acceleration (excludes gravity) — what phone motion looks like on a table
+    const acc = e.acceleration;
+    if (!acc) return;
+
+    const ax = acc.x || 0;
+    const ay = acc.y || 0;
+    const az = acc.z || 0;
+
+    // Smooth
+    curX += (ax - curX) * SMOOTH;
+    curY += (ay - curY) * SMOOTH;
+    curZ += (az - curZ) * SMOOTH;
+
+    // Accumulate position from acceleration (dead-reckoning, decays toward 0)
+    const last = history.length ? history[history.length - 1] : { x: 0, y: 0 };
+    const DECAY = 0.97;
+    const px = last.x * DECAY + curX * 0.01;
+    const py = last.y * DECAY + curY * 0.01;
+
+    history.push({ x: px, y: py });
+    if (history.length > MAX_HISTORY) history.shift();
+
+    // Readout
+    numX.textContent = fmt(curX);
+    numY.textContent = fmt(curY);
+    numZ.textContent = fmt(curZ);
+  }
+
+  function startTracking() {
+    window.addEventListener('devicemotion', onMotion);
+    statusEl.textContent = 'Live';
+    statusEl.classList.add('active');
+    controls.classList.add('visible');
+    started = true;
+    loop();
+  }
+
+  function requestPermission() {
+    // iOS 13+ requires explicit permission
+    if (typeof DeviceMotionEvent !== 'undefined' &&
+        typeof DeviceMotionEvent.requestPermission === 'function') {
+      DeviceMotionEvent.requestPermission()
+        .then(state => {
+          if (state === 'granted') {
+            startBtn.style.display = 'none';
+            startTracking();
+          } else {
+            statusEl.textContent = 'Permission denied';
+          }
+        })
+        .catch(err => {
+          statusEl.textContent = 'Error: ' + err.message;
+        });
+    } else {
+      // Android / older iOS — no permission needed
+      startBtn.style.display = 'none';
+      startTracking();
+    }
+  }
+
+  btnClear.addEventListener('click', () => {
+    history.length = 0;
+    viewX = cx;
+    viewY = cy;
+  });
+
+  btnPause.addEventListener('click', () => {
+    paused = !paused;
+    btnPause.textContent = paused ? 'Resume' : 'Pause';
+    statusEl.textContent = paused ? 'Paused' : 'Live';
+    if (paused) statusEl.classList.remove('active');
+    else statusEl.classList.add('active');
+  });
+
+  startBtn.addEventListener('click', requestPermission);
+
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+})();
+</script>
+</body>
+</html>
