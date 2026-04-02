@@ -160,21 +160,27 @@
   const btnClear = document.getElementById('btn-clear');
   const btnPause = document.getElementById('btn-pause');
 
-  // History of {x, y} points (acceleration values, phone flat)
+  // History of {x, y} points (position in meters, phone flat on table)
   const MAX_HISTORY = 600;
   const history = [];
 
   let paused = false;
   let started = false;
   let cx = 0, cy = 0; // canvas center
-  let scale = 40; // pixels per m/s²
+  const SCALE = 180;  // pixels per meter
   let dpr = window.devicePixelRatio || 1;
 
-  // Current smoothed values
-  let curX = 0, curY = 0, curZ = 0;
-  const SMOOTH = 0.2;
+  // Physics state
+  let pos = { x: 0, y: 0 };
+  let vel = { x: 0, y: 0 };
+  let lastMotionTime = 0;
 
-  // Viewport offset for panning the trail
+  // Current smoothed display values
+  let curX = 0, curY = 0, curZ = 0;
+  const SMOOTH = 0.3;
+
+  // Viewport: translates canvas so origin sits at canvas center
+  // (updated in resizeCanvas and when canvas is resized)
   let viewX = 0, viewY = 0;
 
   function resizeCanvas() {
@@ -186,6 +192,8 @@
     canvas.style.height = wrap.clientHeight + 'px';
     cx = canvas.width / 2;
     cy = canvas.height / 2;
+    // Keep origin at center when not yet tracking
+    if (!started) { viewX = cx; viewY = cy; }
     draw();
   }
 
@@ -208,11 +216,10 @@
 
     if (history.length < 2) return;
 
-    // Translate so "origin" drifts to keep current position visible
+    // Pan: smoothly keep the current head near canvas center
     const last = history[history.length - 1];
-    // Target: current position at center with slight lag
-    const targetOX = cx - last.x * scale * dpr;
-    const targetOY = cy - last.y * scale * dpr;
+    const targetOX = cx - last.x * SCALE * dpr;
+    const targetOY = cy - last.y * SCALE * dpr;
     viewX += (targetOX - viewX) * 0.06;
     viewY += (targetOY - viewY) * 0.06;
 
@@ -222,21 +229,21 @@
     // Draw trail
     const n = history.length;
     for (let i = 1; i < n; i++) {
-      const t = i / n; // 0..1
+      const t = i / n; // 0..1, 1 = newest
       const p = history[i - 1];
       const q = history[i];
-      const alpha = Math.pow(t, 1.5) * 0.85 + 0.05;
+      const alpha = Math.pow(t, 1.2) * 0.9 + 0.05;
 
       ctx.beginPath();
-      ctx.moveTo(p.x * scale * dpr, p.y * scale * dpr);
-      ctx.lineTo(q.x * scale * dpr, q.y * scale * dpr);
+      ctx.moveTo(p.x * SCALE * dpr, p.y * SCALE * dpr);
+      ctx.lineTo(q.x * SCALE * dpr, q.y * SCALE * dpr);
 
-      // Color shifts from cool blue (old) to hot red (new)
+      // Color shifts from cool blue (old) to hot red/orange (new)
       const r = Math.round(t * 248 + (1 - t) * 60);
       const g = Math.round(t * 80 + (1 - t) * 130);
       const b = Math.round(t * 72 + (1 - t) * 250);
       ctx.strokeStyle = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
-      ctx.lineWidth = (1 + t * 2) * dpr;
+      ctx.lineWidth = (1 + t * 2.5) * dpr;
       ctx.lineCap = 'round';
       ctx.stroke();
     }
@@ -244,14 +251,14 @@
     // Current position dot
     const head = history[history.length - 1];
     ctx.beginPath();
-    ctx.arc(head.x * scale * dpr, head.y * scale * dpr, 5 * dpr, 0, Math.PI * 2);
+    ctx.arc(head.x * SCALE * dpr, head.y * SCALE * dpr, 5 * dpr, 0, Math.PI * 2);
     ctx.fillStyle = '#fff';
     ctx.fill();
 
     // Pulse ring
     const pulse = (Date.now() % 1200) / 1200;
     ctx.beginPath();
-    ctx.arc(head.x * scale * dpr, head.y * scale * dpr, (5 + pulse * 14) * dpr, 0, Math.PI * 2);
+    ctx.arc(head.x * SCALE * dpr, head.y * SCALE * dpr, (5 + pulse * 14) * dpr, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(255,255,255,${(1 - pulse) * 0.4})`;
     ctx.lineWidth = 1.5 * dpr;
     ctx.stroke();
@@ -260,7 +267,7 @@
   }
 
   function drawGrid(w, h) {
-    const step = scale * dpr;
+    const step = SCALE * dpr;
     const ox = ((viewX % step) + step) % step;
     const oy = ((viewY % step) + step) % step;
 
@@ -304,7 +311,7 @@
   function onMotion(e) {
     if (paused) return;
 
-    // acceleration (excludes gravity) — what phone motion looks like on a table
+    // acceleration excludes gravity — pure device motion
     const acc = e.acceleration;
     if (!acc) return;
 
@@ -312,18 +319,25 @@
     const ay = acc.y || 0;
     const az = acc.z || 0;
 
-    // Smooth
+    // dt in seconds, clamped so big gaps don't cause jumps
+    const now = Date.now();
+    const dt = lastMotionTime ? Math.min((now - lastMotionTime) / 1000, 0.05) : 0.016;
+    lastMotionTime = now;
+
+    // Smooth for readout display
     curX += (ax - curX) * SMOOTH;
     curY += (ay - curY) * SMOOTH;
     curZ += (az - curZ) * SMOOTH;
 
-    // Accumulate position from acceleration (dead-reckoning, decays toward 0)
-    const last = history.length ? history[history.length - 1] : { x: 0, y: 0 };
-    const DECAY = 0.97;
-    const px = last.x * DECAY + curX * 0.01;
-    const py = last.y * DECAY + curY * 0.01;
+    // Integrate: acceleration → velocity → position
+    // Friction on velocity simulates the sensor noise settling back to rest
+    const FRICTION = 0.88;
+    vel.x = (vel.x + ax * dt) * FRICTION;
+    vel.y = (vel.y + ay * dt) * FRICTION;
+    pos.x += vel.x * dt;
+    pos.y += vel.y * dt;
 
-    history.push({ x: px, y: py });
+    history.push({ x: pos.x, y: pos.y });
     if (history.length > MAX_HISTORY) history.shift();
 
     // Readout
@@ -333,6 +347,8 @@
   }
 
   function startTracking() {
+    viewX = cx;
+    viewY = cy;
     window.addEventListener('devicemotion', onMotion);
     statusEl.textContent = 'Live';
     statusEl.classList.add('active');
@@ -366,8 +382,9 @@
 
   btnClear.addEventListener('click', () => {
     history.length = 0;
-    viewX = cx;
-    viewY = cy;
+    pos.x = 0; pos.y = 0;
+    vel.x = 0; vel.y = 0;
+    viewX = cx; viewY = cy;
   });
 
   btnPause.addEventListener('click', () => {
