@@ -138,7 +138,7 @@
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
   <button id="start-btn">Enable Motion</button>
-  <span id="version">v1.8</span>
+  <span id="version">v1.9</span>
   <div id="controls">
     <button class="ctrl-btn" id="btn-clear">Clear</button>
     <button class="ctrl-btn" id="btn-pause">Pause</button>
@@ -190,7 +190,7 @@
   let started = false;
   let optSmooth = true;
   let optInvert = true;
-  let optRaw    = false;
+  let optRaw    = false; // tracks visibility of readout
   let cx = 0, cy = 0;
   let dpr = window.devicePixelRatio || 1;
 
@@ -421,12 +421,9 @@
     history.push({ x: px, y: py, z: pz });
     if (history.length > MAX_HISTORY) history.shift();
 
-    const dx = optRaw ? ax : curX;
-    const dy = optRaw ? ay : curY;
-    const dz = optRaw ? az : curZ;
-    numX.textContent = fmt(dx);
-    numY.textContent = fmt(dy);
-    numZ.textContent = fmt(dz);
+    numX.textContent = fmt(curX);
+    numY.textContent = fmt(curY);
+    numZ.textContent = fmt(curZ);
   }
 
   function startTracking() {
@@ -478,7 +475,13 @@
   }
   makeToggle(btnSmooth, () => optSmooth, v => { optSmooth = v; });
   makeToggle(btnInvert, () => optInvert, v => { optInvert = v; });
-  makeToggle(btnRaw,    () => optRaw,    v => { optRaw    = v; });
+  const readout = document.getElementById('readout');
+  readout.style.display = 'none';
+  btnRaw.addEventListener('click', () => {
+    optRaw = !optRaw;
+    btnRaw.classList.toggle('on', optRaw);
+    readout.style.display = optRaw ? '' : 'none';
+  });
 
   btnPause.addEventListener('click', () => {
     paused = !paused;
