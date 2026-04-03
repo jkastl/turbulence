@@ -133,7 +133,7 @@
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
   <button id="start-btn">Enable Motion</button>
-  <span id="version">v1.6</span>
+  <span id="version">v1.7</span>
   <div id="controls">
     <button class="ctrl-btn" id="btn-clear">Clear</button>
     <button class="ctrl-btn" id="btn-pause">Pause</button>
@@ -184,9 +184,9 @@
   const MAX_G = 4; // m/s² — severe turbulence threshold
   let scale = 1; // recomputed in resizeCanvas
 
-  // Smoothed values for readout only
+  // Smoothed values — used for both readout and history
   let curX = 0, curY = 0, curZ = 0;
-  const SMOOTH = 0.25;
+  const SMOOTH = 0.08;
 
   // Peak magnitude for the level badge (decays over time)
   let peakMag = 0;
@@ -238,17 +238,24 @@
     // Decay peak
     peakMag *= PEAK_DECAY;
 
-    // Draw trail — all points relative to canvas center
+    // Draw trail as bezier spline — midpoints are on-curve, history points are control points
     const n = history.length;
+    const sx = i => cx - history[i].x * scale;
+    const sy = i => cy + history[i].y * scale;
+
     for (let i = 1; i < n; i++) {
-      const t = i / n; // 0=oldest, 1=newest
-      const p = history[i - 1];
-      const q = history[i];
+      const t = i / n;
       const alpha = Math.pow(t, 1.5) * 0.88 + 0.04;
 
+      // Start at midpoint of previous segment, end at midpoint of this segment
+      const x0 = i === 1     ? sx(0) : (sx(i - 2) + sx(i - 1)) / 2;
+      const y0 = i === 1     ? sy(0) : (sy(i - 2) + sy(i - 1)) / 2;
+      const x2 = i === n - 1 ? sx(n - 1) : (sx(i - 1) + sx(i)) / 2;
+      const y2 = i === n - 1 ? sy(n - 1) : (sy(i - 1) + sy(i)) / 2;
+
       ctx.beginPath();
-      ctx.moveTo(cx - p.x * scale, cy + p.y * scale);
-      ctx.lineTo(cx - q.x * scale, cy + q.y * scale);
+      ctx.moveTo(x0, y0);
+      ctx.quadraticCurveTo(sx(i - 1), sy(i - 1), x2, y2);
 
       const r = Math.round(t * 248 + (1 - t) * 60);
       const g = Math.round(t * 80  + (1 - t) * 130);
@@ -390,11 +397,11 @@
     curZ += (az - curZ) * SMOOTH;
 
     // Track peak magnitude for level badge
-    const mag = Math.sqrt(ax * ax + ay * ay);
+    const mag = Math.sqrt(curX * curX + curY * curY);
     if (mag > peakMag) peakMag = mag;
 
-    // Raw acceleration directly as position — no integration
-    history.push({ x: ax, y: ay, z: az });
+    // Smoothed acceleration as position
+    history.push({ x: curX, y: curY, z: curZ });
     if (history.length > MAX_HISTORY) history.shift();
 
     numX.textContent = fmt(curX);
