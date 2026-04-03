@@ -33,5 +33,5 @@ Push to `main` to deploy via GitHub Pages.
 ## Instructions for Claude
 
 - Just build the feature. No tests, no code analysis, no linting, no refactoring suggestions, no comments explaining what code does.
-- Bump the minor version in `index.html` (`v1.x`) with every change.
+- Bump the minor version in `index.html` (`v1.x`) and update the date (`YYYY-MM-DD`) with every change.
 - Single file only — keep everything in `index.html`.
