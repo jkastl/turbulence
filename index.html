@@ -121,6 +121,11 @@
     -webkit-tap-highlight-color: transparent;
   }
   .ctrl-btn:active { background: rgba(255,255,255,0.14); }
+  .ctrl-btn.on {
+    background: rgba(99,102,241,0.25);
+    color: #c0c8ff;
+    border-color: rgba(99,102,241,0.5);
+  }
 </style>
 </head>
 <body>
@@ -133,10 +138,13 @@
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
   <button id="start-btn">Enable Motion</button>
-  <span id="version">v1.7</span>
+  <span id="version">v1.8</span>
   <div id="controls">
     <button class="ctrl-btn" id="btn-clear">Clear</button>
     <button class="ctrl-btn" id="btn-pause">Pause</button>
+    <button class="ctrl-btn on" id="btn-smooth">Smooth</button>
+    <button class="ctrl-btn on" id="btn-invert">Invert</button>
+    <button class="ctrl-btn" id="btn-raw">Raw #s</button>
   </div>
 </div>
 
@@ -167,8 +175,11 @@
   const numX = document.getElementById('num-x');
   const numY = document.getElementById('num-y');
   const numZ = document.getElementById('num-z');
-  const btnClear = document.getElementById('btn-clear');
-  const btnPause = document.getElementById('btn-pause');
+  const btnClear  = document.getElementById('btn-clear');
+  const btnPause  = document.getElementById('btn-pause');
+  const btnSmooth = document.getElementById('btn-smooth');
+  const btnInvert = document.getElementById('btn-invert');
+  const btnRaw    = document.getElementById('btn-raw');
 
   // Each point is the raw acceleration sample {x, y} in m/s²
   // Center of canvas = (0,0) = calm. Distance from center = turbulence intensity.
@@ -177,6 +188,9 @@
 
   let paused = false;
   let started = false;
+  let optSmooth = true;
+  let optInvert = true;
+  let optRaw    = false;
   let cx = 0, cy = 0;
   let dpr = window.devicePixelRatio || 1;
 
@@ -240,8 +254,8 @@
 
     // Draw trail as bezier spline — midpoints are on-curve, history points are control points
     const n = history.length;
-    const sx = i => cx - history[i].x * scale;
-    const sy = i => cy + history[i].y * scale;
+    const sx = i => optInvert ? cx - history[i].x * scale : cx + history[i].x * scale;
+    const sy = i => optInvert ? cy + history[i].y * scale : cy - history[i].y * scale;
 
     for (let i = 1; i < n; i++) {
       const t = i / n;
@@ -268,8 +282,8 @@
 
     // Current dot
     const head = history[history.length - 1];
-    const hx = cx - head.x * scale;
-    const hy = cy + head.y * scale;
+    const hx = optInvert ? cx - head.x * scale : cx + head.x * scale;
+    const hy = optInvert ? cy + head.y * scale : cy - head.y * scale;
 
     ctx.beginPath();
     ctx.arc(hx, hy, 4.5 * dpr, 0, Math.PI * 2);
@@ -291,7 +305,7 @@
     ctx.fillStyle = lvl.color;
     ctx.fillText(lvl.label.toUpperCase(), cx, 10 * dpr);
 
-    drawZBar(-head.z);
+    drawZBar(optInvert ? -head.z : head.z);
   }
 
   function drawRings() {
@@ -391,22 +405,28 @@
     const ay = acc.y || 0;
     const az = acc.z || 0;
 
-    // Smooth for readout
+    // Always update EMA
     curX += (ax - curX) * SMOOTH;
     curY += (ay - curY) * SMOOTH;
     curZ += (az - curZ) * SMOOTH;
 
+    const px = optSmooth ? curX : ax;
+    const py = optSmooth ? curY : ay;
+    const pz = optSmooth ? curZ : az;
+
     // Track peak magnitude for level badge
-    const mag = Math.sqrt(curX * curX + curY * curY);
+    const mag = Math.sqrt(px * px + py * py);
     if (mag > peakMag) peakMag = mag;
 
-    // Smoothed acceleration as position
-    history.push({ x: curX, y: curY, z: curZ });
+    history.push({ x: px, y: py, z: pz });
     if (history.length > MAX_HISTORY) history.shift();
 
-    numX.textContent = fmt(curX);
-    numY.textContent = fmt(curY);
-    numZ.textContent = fmt(curZ);
+    const dx = optRaw ? ax : curX;
+    const dy = optRaw ? ay : curY;
+    const dz = optRaw ? az : curZ;
+    numX.textContent = fmt(dx);
+    numY.textContent = fmt(dy);
+    numZ.textContent = fmt(dz);
   }
 
   function startTracking() {
@@ -449,6 +469,16 @@
     history.length = 0;
     peakMag = 0;
   });
+
+  function makeToggle(btn, getter, setter) {
+    btn.addEventListener('click', () => {
+      setter(!getter());
+      btn.classList.toggle('on', getter());
+    });
+  }
+  makeToggle(btnSmooth, () => optSmooth, v => { optSmooth = v; });
+  makeToggle(btnInvert, () => optInvert, v => { optInvert = v; });
+  makeToggle(btnRaw,    () => optRaw,    v => { optRaw    = v; });
 
   btnPause.addEventListener('click', () => {
     paused = !paused;
