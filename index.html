@@ -138,7 +138,7 @@
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
   <button id="start-btn">Enable Motion</button>
-  <span id="version">v1.9</span>
+  <span id="version">v1.10</span>
   <div id="controls">
     <button class="ctrl-btn" id="btn-clear">Clear</button>
     <button class="ctrl-btn" id="btn-pause">Pause</button>
@@ -151,15 +151,15 @@
 <div id="readout">
   <div class="val-box" id="val-x">
     <div class="val-label">X &mdash; Left/Right</div>
-    <div class="val-num" id="num-x">0.00</div>
+    <div class="val-num" id="num-x">+0.000G</div>
   </div>
   <div class="val-box" id="val-y">
     <div class="val-label">Y &mdash; Fwd/Back</div>
-    <div class="val-num" id="num-y">0.00</div>
+    <div class="val-num" id="num-y">+0.000G</div>
   </div>
   <div class="val-box" id="val-z">
     <div class="val-label">Z &mdash; Vertical</div>
-    <div class="val-num" id="num-z">0.00</div>
+    <div class="val-num" id="num-z">+0.000G</div>
   </div>
 </div>
 
@@ -194,11 +194,12 @@
   let cx = 0, cy = 0;
   let dpr = window.devicePixelRatio || 1;
 
-  // Scale: px per m/s² — sized so ±MAX_G fills the canvas radius
-  const MAX_G = 4; // m/s² — severe turbulence threshold
-  let scale = 1; // recomputed in resizeCanvas
+  // Scale: px per G — sized so ±MAX_G fills the canvas radius
+  const G = 9.81;          // m/s² per G
+  const MAX_G = 0.5;       // G — severe turbulence threshold
+  let scale = 1;           // recomputed in resizeCanvas
 
-  // Smoothed values — used for both readout and history
+  // Smoothed values in G — used for both readout and history
   let curX = 0, curY = 0, curZ = 0;
   const SMOOTH = 0.08;
 
@@ -206,12 +207,12 @@
   let peakMag = 0;
   const PEAK_DECAY = 0.995; // per frame
 
-  // Turbulence level thresholds (m/s²)
+  // Turbulence level thresholds (G)
   const LEVELS = [
-    { label: 'Severe',   min: 3.0, color: '#ff4444' },
-    { label: 'Moderate', min: 1.2, color: '#fb923c' },
-    { label: 'Light',    min: 0.3, color: '#facc15' },
-    { label: 'Calm',     min: 0,   color: '#4ade80' },
+    { label: 'Severe',   min: 0.30, color: '#ff4444' },
+    { label: 'Moderate', min: 0.12, color: '#fb923c' },
+    { label: 'Light',    min: 0.03, color: '#facc15' },
+    { label: 'Calm',     min: 0,    color: '#4ade80' },
   ];
 
   function getLevel(mag) {
@@ -233,7 +234,7 @@
   }
 
   function fmt(v) {
-    return (v >= 0 ? '+' : '') + v.toFixed(2);
+    return (v >= 0 ? '+' : '') + v.toFixed(3) + 'G';
   }
 
   function draw() {
@@ -309,11 +310,11 @@
   }
 
   function drawRings() {
-    // Rings at 1, 2, 4 m/s² with labels
+    // Rings at 0.1, 0.25, 0.5 G with labels
     const rings = [
-      { r: 1,   label: '1',  alpha: 0.15 },
-      { r: 2,   label: '2',  alpha: 0.12 },
-      { r: MAX_G, label: `${MAX_G}`, alpha: 0.09 },
+      { r: 0.1,   label: '0.1G',  alpha: 0.15 },
+      { r: 0.25,  label: '0.25G', alpha: 0.12 },
+      { r: MAX_G, label: '0.5G',  alpha: 0.09 },
     ];
 
     // Crosshair axes
@@ -401,11 +402,11 @@
     const acc = e.acceleration;
     if (!acc) return;
 
-    const ax = acc.x || 0;
-    const ay = acc.y || 0;
-    const az = acc.z || 0;
+    const ax = (acc.x || 0) / G;
+    const ay = (acc.y || 0) / G;
+    const az = (acc.z || 0) / G;
 
-    // Always update EMA
+    // Always update EMA (values in G)
     curX += (ax - curX) * SMOOTH;
     curY += (ay - curY) * SMOOTH;
     curZ += (az - curZ) * SMOOTH;
