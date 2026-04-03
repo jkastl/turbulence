@@ -133,7 +133,7 @@
 <div id="canvas-wrap">
   <canvas id="canvas"></canvas>
   <button id="start-btn">Enable Motion</button>
-  <span id="version">v1.4</span>
+  <span id="version">v1.6</span>
   <div id="controls">
     <button class="ctrl-btn" id="btn-clear">Clear</button>
     <button class="ctrl-btn" id="btn-pause">Pause</button>
@@ -247,8 +247,8 @@
       const alpha = Math.pow(t, 1.5) * 0.88 + 0.04;
 
       ctx.beginPath();
-      ctx.moveTo(cx + p.x * scale, cy - p.y * scale);
-      ctx.lineTo(cx + q.x * scale, cy - q.y * scale);
+      ctx.moveTo(cx - p.x * scale, cy + p.y * scale);
+      ctx.lineTo(cx - q.x * scale, cy + q.y * scale);
 
       const r = Math.round(t * 248 + (1 - t) * 60);
       const g = Math.round(t * 80  + (1 - t) * 130);
@@ -261,8 +261,8 @@
 
     // Current dot
     const head = history[history.length - 1];
-    const hx = cx + head.x * scale;
-    const hy = cy - head.y * scale;
+    const hx = cx - head.x * scale;
+    const hy = cy + head.y * scale;
 
     ctx.beginPath();
     ctx.arc(hx, hy, 4.5 * dpr, 0, Math.PI * 2);
@@ -284,7 +284,7 @@
     ctx.fillStyle = lvl.color;
     ctx.fillText(lvl.label.toUpperCase(), cx, 10 * dpr);
 
-    drawZBar(head.z);
+    drawZBar(-head.z);
   }
 
   function drawRings() {
