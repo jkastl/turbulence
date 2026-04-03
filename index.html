@@ -283,6 +283,8 @@
     ctx.textBaseline = 'top';
     ctx.fillStyle = lvl.color;
     ctx.fillText(lvl.label.toUpperCase(), cx, 10 * dpr);
+
+    drawZBar(head.z);
   }
 
   function drawRings() {
@@ -327,6 +329,51 @@
     ctx.restore();
   }
 
+  function drawZBar(z) {
+    // Vertical bar on the right edge: center = 0, up = positive Z, down = negative Z
+    const barW = 10 * dpr;
+    const barH = canvas.height * 0.6;
+    const barX = canvas.width - barW - 4 * dpr;
+    const barY = cy - barH / 2;
+
+    // Track background
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.beginPath();
+    ctx.roundRect(barX, barY, barW, barH, 4 * dpr);
+    ctx.fill();
+
+    // Fill from center outward
+    const clampedZ = Math.max(-MAX_G, Math.min(MAX_G, z || 0));
+    const fillH = Math.abs(clampedZ) / MAX_G * (barH / 2);
+    const fillY = clampedZ >= 0 ? cy - fillH : cy;
+    const zT = Math.abs(clampedZ) / MAX_G; // 0..1
+    const zR = Math.round(zT * 168 + (1 - zT) * 100);
+    const zG = Math.round(zT * 85  + (1 - zT) * 180);
+    const zB = Math.round(zT * 220 + (1 - zT) * 200);
+    ctx.fillStyle = `rgba(${zR},${zG},${zB},0.75)`;
+    ctx.beginPath();
+    ctx.roundRect(barX, fillY, barW, Math.max(fillH, 1), 3 * dpr);
+    ctx.fill();
+
+    // Center tick
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(barX, cy);
+    ctx.lineTo(barX + barW, cy);
+    ctx.stroke();
+
+    // Label
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.font = `${9 * dpr}px -apple-system, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('Z', barX + barW / 2, barY - 2 * dpr);
+
+    ctx.restore();
+  }
+
   function onMotion(e) {
     if (paused) return;
 
@@ -347,7 +394,7 @@
     if (mag > peakMag) peakMag = mag;
 
     // Raw acceleration directly as position — no integration
-    history.push({ x: ax, y: ay });
+    history.push({ x: ax, y: ay, z: az });
     if (history.length > MAX_HISTORY) history.shift();
 
     numX.textContent = fmt(curX);
